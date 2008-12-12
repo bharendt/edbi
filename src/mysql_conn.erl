@@ -86,6 +86,11 @@
 	 get_pool_id/1
 	]).
 
+-export([system_continue/3,  
+   system_terminate/4, 
+   system_code_change/4
+  ]).
+
 %%--------------------------------------------------------------------
 %% External exports (should only be used by the 'mysql_auth' module)
 %%--------------------------------------------------------------------
@@ -394,6 +399,8 @@ loop(State) ->
 			NewState
 		end,
 	    loop(State1);
+	{system, From, Req} ->
+    sys:handle_system_msg(Req, From, none, ?MODULE, false, [State]);      
 	{mysql_recv, RecvPid, data, Packet, Num} ->
 	    ?Log2(LogFun, error,
 		 "received data when not expecting any -- "
@@ -404,6 +411,16 @@ loop(State) ->
 		  "received unknown signal, exiting: ~p", [Unknown]),
 	    error
     end.
+    
+system_continue(_Parent, _Debug, [State]) ->
+    loop(State).
+
+system_terminate(_Reason, _Parent, _Debug, [State]) ->
+    {ok, [State]}.
+
+system_code_change([State], _Module, _OldVsn, _Extra) ->
+    {ok, [State]}.
+
 
 %% GenSrvFrom is either a gen_server:call/3 From term(),
 %% or a pid if no gen_server was used to make the query
