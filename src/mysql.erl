@@ -551,6 +551,13 @@ handle_call({add_conn, Conn}, _From, State) ->
 
 handle_call(get_logfun, _From, State) ->
     {reply, {ok, State#state.log_fun}, State}.
+    
+handle_cast(stop, State) ->
+  % close connections 
+  lists:foreach(fun({ConnPid, _}) -> 
+    catch ConnPid ! {stop, normal}
+  end, gb_trees:to_list(State#state.pids_pools)),
+  {stop, _Reason = normal, State};
 
 handle_cast({prepare, Name, Stmt}, State) ->
     LogFun = State#state.log_fun,
@@ -607,7 +614,7 @@ handle_info({'DOWN', _MonitorRef, process, Pid, Info}, State) ->
 		  "received 'DOWN' signal from pid ~p not in my list", [Pid]),
 	    {noreply, State}
     end.
-    
+
 terminate(Reason, State) ->
     LogFun = State#state.log_fun,
     LogLevel = case Reason of

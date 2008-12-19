@@ -400,7 +400,10 @@ loop(State) ->
 		end,
 	    loop(State1);
 	{system, From, Req} ->
-    sys:handle_system_msg(Req, From, none, ?MODULE, false, [State]);      
+    sys:handle_system_msg(Req, From, none, ?MODULE, false, [State]);    
+  {stop, Reason} ->
+    gen_tcp:close(State#state.socket),
+    {'Exit', Reason};
 	{mysql_recv, RecvPid, data, Packet, Num} ->
 	    ?Log2(LogFun, error,
 		 "received data when not expecting any -- "
