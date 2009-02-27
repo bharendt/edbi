@@ -1,80 +1,79 @@
-%%%-------------------------------------------------------------------
-%% @copyright Geoff Cant
-%% @author Geoff Cant <nem@erlang.geek.nz>
-%% @version {@vsn}, {@date} {@time}
-%% @doc EDBI Application
+%% =====================================================================
+%% This library is free software; you can redistribute it and/or modify
+%% it under the terms of the GNU Lesser General Public License as
+%% published by the Free Software Foundation; either version 2 of the
+%% License, or (at your option) any later version.
+%%
+%% This library is distributed in the hope that it will be useful, but
+%% WITHOUT ANY WARRANTY; without even the implied warranty of
+%% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+%% Lesser General Public License for more details.
+%%
+%% You should have received a copy of the GNU Lesser General Public
+%% License along with this library; if not, write to the Free Software
+%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% USA
+%%
+%%
+%% @copyright Bertram Harendt
+%% @author Bertram Harendt <edbi@bertram-harendt.de>
+%% @version {@version}
 %% @end
-%%%-------------------------------------------------------------------
+%% =====================================================================
+
+%% @doc EDBI Application
+%%
+
 -module(edbi_app).
 
 -behaviour(application).
 
-%% Application callbacks
--export([start/0, start/2, stop/1]).
+% exports
+-export([start/0, stop/0]).
+% callbacks
+-export([start/2, start_phase/3, prep_stop/1, stop/1, config_change/3]).
 
-ensure_started(App) ->
-    case application:start(App) of
-        ok ->
-            true;
-        {error, {already_started, App}} ->
-            true;
-        Else -> 
-            error_logger:error_msg("Couldn't start ~p: ~p", [App, Else])
-    end.
-        
-%% @spec start() -> ok
-%% @doc Start the vhreg server.
+%% @spec start() -> ok | {error, {already_started, edbi}} | {error, Reason}
+%% @doc Starts the edbi application.
 start() ->
-    application:load(edbi),
-    {ok, Deps} = application:get_key(edbi, applications),
-    true = lists:all(fun ensure_started/1, Deps),
-    application:start(edbi).
+  case application:load(edbi) of
+    Loaded when Loaded == ok; {error,{already_loaded, mnesia}} == Loaded ->
+      application:start(edbi);
+    {error, Reason} -> 
+      {error, Reason}
+  end.
+  
+%% @spec stop() -> ok | {error, Reason}
+%% @doc Stops the edbi application.
+stop() ->
+  application:stop(edbi).
 
 %%====================================================================
 %% Application callbacks
 %%====================================================================
-%%--------------------------------------------------------------------
-%% Function: start(Type, StartArgs) -> {ok, Pid} |
-%%                                     {ok, Pid, State} |
-%%                                     {error, Reason}
-%% Description: This function is called whenever an application 
-%% is started using application:start/1,2, and should start the processes
-%% of the application. If the application is structured according to the
-%% OTP design principles as a supervision tree, this means starting the
-%% top supervisor of the tree.
-%%--------------------------------------------------------------------
-start(_Type, StartArgs) ->
-    case edbi_sup:start_link(StartArgs) of
-        {ok, Pid} ->
-            load_pools(),
-            {ok, Pid};
-        Else ->
-            Else
-    end.
 
-%%--------------------------------------------------------------------
-%% Function: stop(State) -> void()
-%% Description: This function is called whenever an application
-%% has stopped. It is intended to be the opposite of Module:start/2 and
-%% should do any necessary cleaning up. The return value is ignored. 
-%%--------------------------------------------------------------------
-stop(_State) ->
-    ok.
+%% @hidden
+start(_StartType, StartArgs) -> 
+  case edbi_sup:start_link(StartArgs) of
+    {ok, Pid} -> {ok, Pid};
+    Error -> Error
+  end.
 
-load_pools() ->
-    lists:foreach(fun load_pool/1, pools()).
+%% @hidden  
+start_phase(_Phase, _StartType, _PhaseArgs) -> 
+  ok.
 
-load_pool({Id, Driver, Options, Count}) ->
-    case edbi_sup:start_pool(Id, [Driver, Options, Count]) of
-        {ok, _} -> ok;
-        {error, Reason} ->
-            erlang:error({couldnt_start_pool, Reason})
-    end.
+%% @hidden  
+prep_stop(State) -> 
+  State.
 
-pools() ->
-    {ok, Pools} = application:get_env(edbi, pools),
-    Pools.
+%% @hidden  
+stop(State) ->
+  ok.
 
+%% @hidden  
+config_change(_Changed, _New, _Removed) -> 
+  ok.
 
 %%====================================================================
 %% Internal functions
