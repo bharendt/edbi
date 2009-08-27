@@ -405,13 +405,12 @@ loop(State) ->
     gen_tcp:close(State#state.socket),
     {'Exit', Reason};
 	{mysql_recv, RecvPid, data, Packet, Num} ->
-	    ?Log2(LogFun, error,
-		 "received data when not expecting any -- "
-		 "ignoring it: {~p, ~p}", [Num, Packet]),
+	    ?Log2(LogFun, error, "received data when not expecting any -- ignoring it: {~p, ~p}", [Num, Packet]),
 	    loop(State);
-        Unknown ->
-	    ?Log2(LogFun, error,
-		  "received unknown signal, exiting: ~p", [Unknown]),
+  {mysql_recv, RecvPid,closed,normal} ->
+    erlang:exit(connection_closed);
+  Unknown ->
+	    ?Log2(LogFun, error,"received unknown signal, exiting: ~p", [Unknown]),
 	    error
     end.
     
