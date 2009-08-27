@@ -77,11 +77,14 @@
 
 
 %% External exports
--export([start_link/5,
+-export([
+   start_link/1,
+   start_link/5,
 	 start_link/6,
 	 start_link/7,
 	 start_link/8,
 
+   start/1,
 	 start/5,
 	 start/6,
 	 start/7,
@@ -197,6 +200,9 @@ log(Module, Line, _Level, FormatFun) ->
 %%   Username::string(), Password::string(), Database::string(),
 %%   LogFun::undefined | function() of arity 4) ->
 %%     {ok, Pid} | ignore | {error, Err}
+start_link(LogFun) ->
+  start1(LogFun, start_link).
+
 start_link(PoolId, Host, User, Password, Database) ->
     start_link(PoolId, Host, ?PORT, User, Password, Database).
 
@@ -221,6 +227,8 @@ start_link(PoolId, Host, Port, User, Password, Database, LogFun, Encoding) ->
 
 %% @doc These functions are similar to their start_link counterparts,
 %% but they call gen_server:start() instead of gen_server:start_link()
+start(LogFun) ->
+  start1(LogFun, start).
 start(PoolId, Host, User, Password, Database) ->
     start(PoolId, Host, ?PORT, User, Password, Database).
 
@@ -238,6 +246,10 @@ start(PoolId, Host, undefined, User, Password, Database, LogFun, Encoding) ->
 start(PoolId, Host, Port, User, Password, Database, LogFun, Encoding) ->
     start1(PoolId, Host, Port, User, Password, Database, LogFun, Encoding,
 	   start).
+
+start1(LogFun, StartFunc) ->
+    crypto:start(),
+    gen_server:StartFunc({local, ?SERVER}, ?MODULE, [LogFun], []).
 
 start1(PoolId, Host, Port, User, Password, Database, LogFun, Encoding,
        StartFunc) ->
@@ -488,6 +500,10 @@ connect(PoolId, Host, undefined, User, Password, Database, Reconnect) ->
 	    Reconnect).
 
 %% gen_server callbacks
+init([LogFun]) ->
+  LogFun1 = if LogFun == undefined -> fun log/4; true -> LogFun end,
+  State = #state{log_fun = LogFun1},
+  {ok, State};
 
 init([PoolId, Host, Port, User, Password, Database, LogFun, Encoding]) ->
     LogFun1 = if LogFun == undefined -> fun log/4; true -> LogFun end,
