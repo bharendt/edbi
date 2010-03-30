@@ -206,6 +206,12 @@ decode_col({_Name, _Format, _ColNumber, Oid, _Size, _Modifier, _TableOID}, Value
     <<Int64:64/integer-signed>> = Value, Int64;
 decode_col({_Name, _Format, _ColNumber, Oid, _Size, _Modifier, _TableOID}, Value) when Oid == serial8; Oid == bigserial ->
     <<Int64:64/integer-unsigned>> = Value, Int64;
+decode_col({_Name, _Format, _ColNumber, Oid, _Size, _Modifier, _TableOID}, Value) when Oid == timestamp ->
+    % see: http://www.postgresql.org/docs/8.4/static/datatype-datetime.html
+    <<Int64:64/integer-unsigned>> = Value, 
+    TimeInSeconds = Int64 div 1000000, % psql time is stored in microseconds
+    DateTime = calendar:gregorian_seconds_to_datetime(TimeInSeconds + calendar:datetime_to_gregorian_seconds({{2000,1,1},{0,0,0}})), % psql timestamp starts at 2000-01-01
+    {timestamp, DateTime};
 decode_col({_Name, _Format, _ColNumber, Oid, _Size, _Modifier, _TableOID}, <<0>>) when Oid == boolean; Oid == bool ->
     false;
 decode_col({_Name, _Format, _ColNumber, Oid, _Size, _Modifier, _TableOID}, <<1>>) when Oid == boolean; Oid == bool ->
