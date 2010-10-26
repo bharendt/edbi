@@ -193,7 +193,7 @@ connected(StateData, Sock) ->
     %% 'oidmap' in the process dictionary.
     Packet = encode_message(squery, "SELECT oid, typname FROM pg_type"),
     ok = send(Sock, Packet),
-    {ok, [{"SELECT", _ColDesc, Rows}]} = process_squery([]),
+    {ok, [{"SELECT"++_Rest, _ColDesc, Rows}]} = process_squery([]),
     Rows1 = lists:map(fun ([CodeS, NameS]) ->
 			      Code = list_to_integer(CodeS),
 			      Name = list_to_atom(NameS),
@@ -462,7 +462,7 @@ process_execute_nodata(State) ->
 		"UPDATE "++Rest ->
 		    {ok, [{integer, _, NRows}], _} = erl_scan:string(Rest),
 		    {ok, 'UPDATE', NRows, State};
-		"SELECT" ->
+		"SELECT" ++_Rest  ->
 		    {ok, 'SELECT', should_not_happen, State};
 		"DELETE "++Rest ->
 		    {ok, [{integer, _, NRows}], _} =
@@ -494,7 +494,11 @@ update_parameter(Key, Value, State) ->
     
 process_execute_resultset(Sock, Types, Log) ->
     receive
-	{pgsql, {command_complete, Command}} ->
+	{pgsql, {command_complete, CommandWithNumber}} ->
+	    Command = case string:tokens(CommandWithNumber, " ") of
+	      [Cmd, _] -> Cmd;
+	      _ -> CommandWithNumber
+	    end,
 	    {ok, list_to_atom(Command), lists:reverse(Log)};
 	{pgsql, {data_row, Row}} ->
 	    {ok, DecodedRow} = pgsql_util:decode_row(Types, Row),
