@@ -1,6 +1,6 @@
 {application, edbi,
  [{description, "Erlang Databace Independant Interface"}
-  ,{vsn, "0.1"}
+  ,{vsn, "0.1.1"}
   ,{applications, [kernel, stdlib]}
   ,{mod, {edbi_app, []}}
   ,{env, [{pools, []}]}

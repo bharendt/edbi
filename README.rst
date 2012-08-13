@@ -21,6 +21,20 @@ mysql
 .. [1] Note that this driver isn't tested yet.
 
 
+Installation
+=============
+
+Build the source using rebar:
+
+  ./rebar compile
+  
+Or use it as dependency in the ``rebar.config`` of your erlang application:
+
+  {deps, [
+    {edbi, "0.1.1",
+      {git, "git://github.com/bharendt/edbi.git", {tag, "v0.1.1"}}}
+  ]}.
+
 Configuration
 =============
 
