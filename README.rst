@@ -26,14 +26,14 @@ Installation
 
 Build the source using rebar:
 
-  ./rebar compile
+      ./rebar compile
   
 Or use it as dependency in the ``rebar.config`` of your erlang application:
 
-  {deps, [
-    {edbi, "0.1.1",
-      {git, "git://github.com/bharendt/edbi.git", {tag, "v0.1.1"}}}
-  ]}.
+      {deps, [
+        {edbi, "0.1.2",
+          {git, "git://github.com/bharendt/edbi.git", {tag, "v0.1.2"}}}
+      ]}.
 
 Configuration
 =============
