@@ -279,52 +279,16 @@ handle_call({unprepare, Name}, _From, State) ->
 
 %% Execute a prepared statement
 handle_call({execute, {Name, Params}}, _From, State) ->
-  Sock = State#state.socket,
+  Socket = State#state.socket,
   %%io:format("execute: ~p ~p ~n", [Name, Params]),
   begin % Issue first requests for the prepared statement.
     BindP     = encode_message(bind, {"", Name, Params, [binary]}),
     DescribeP = encode_message(describe, {portal, ""}),
     ExecuteP  = encode_message(execute, {"", 0}),
     FlushP    = encode_message(flush, []),
-    ok = send(Sock, [BindP, DescribeP, ExecuteP, FlushP])
+    ok = send(Socket, [BindP, DescribeP, ExecuteP, FlushP])
   end,
-  receive
-    {pgsql, {bind_complete, _}} -> % Bind reply first.
-      %% Collect response to describe message,
-      %% which gives a hint of the rest of the messages.
-      {ok, Command, Result, NewState} = process_execute(State, Sock),
-      begin % Close portal and end extended query.
-        CloseP = encode_message(close, {portal, ""}),
-        SyncP  = encode_message(sync, []),
-        ok = send(Sock, [CloseP, SyncP])
-      end,
-      receive
-        %% Collect response to close message.
-        {pgsql, {close_complete, _}} ->
-          receive
-            %% Collect response to sync message.
-            {pgsql, {ready_for_query, _Status}} ->
-              %%io:format("execute: ~p ~p ~p~n",
-              %%	      [Status, Command, Result]),
-              {reply, {ok, {Command, Result}}, NewState};
-            {pgsql, {parameter_status, {Key, Value}}} ->
-              NewStateWithUpdatesParameter = update_parameter(Key, Value, NewState),
-              receive
-                %% Collect response to sync message.
-                {pgsql, {ready_for_query, _Status}} ->
-                  {reply, {ok, {Command, Result}}, NewStateWithUpdatesParameter};
-                {pgsql, Unknown} ->
-                  {stop, Unknown, {error, Unknown}, NewState}
-              end;
-            {pgsql, Unknown} ->
-              {stop, Unknown, {error, Unknown}, NewState}
-          end;
-        {pgsql, Unknown} ->
-          {stop, Unknown, {error, Unknown}, NewState}
-      end;
-    {pgsql, Unknown} ->
-      {stop, Unknown, {error, Unknown}, State}
-  end;
+  receive_bind_complete(Socket, State);
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -435,6 +399,66 @@ process_unprepare() ->
 	    process_unprepare()
     end.
 
+%% receives the {pgsql, {bind_complete, _}} event that is expected
+%% after executing a prepared statement and processes the result
+%% of the query. it also handles the {pgsql, {parameter_status, {Key, Value}}}
+%% event, that may be received during the execution
+%% of the prepared statement if the postgres config was reloaded before, 
+%% e.g. by executing the `select pg_reload_conf();` statement.
+receive_bind_complete(Socket, State) ->
+  receive
+    {pgsql, {bind_complete, _}} -> % Bind reply first.
+      %% Collect response to describe message,
+      %% which gives a hint of the rest of the messages.
+      {ok, Command, Result, NewState} = process_execute(State, Socket),
+      begin % Close portal and end extended query.
+        CloseP = encode_message(close, {portal, ""}),
+        SyncP  = encode_message(sync, []),
+        ok = send(Socket, [CloseP, SyncP])
+      end,
+      receive_close_complete(Command, Result, NewState);
+    {pgsql, {parameter_status, {Key, Value}}} ->
+      NewStateWithUpdatedParameter = update_parameter(Key, Value, State),
+      receive_bind_complete(Socket, NewStateWithUpdatedParameter);
+    {pgsql, Unknown} ->
+      {stop, Unknown, {error, Unknown}, State}
+  end.
+
+%% receives the {pgsql, {close_complete, _}} event that is expected
+%% after processing the result of a prepared statement. it also handles the 
+%% parameter_status event, that can be received during the execution
+%% of the prepared statement if the postgres config was reloaded before, 
+%% e.g. by executing the `select pg_reload_conf();` statement.
+receive_close_complete(Command, Result, State) ->
+  receive
+    %% Collect response to close message.
+    {pgsql, {close_complete, _}} ->
+        receive_ready_for_query(Command, Result, State);
+    {pgsql, {parameter_status, {Key, Value}}} ->
+      NewStateWithUpdatedParameter = update_parameter(Key, Value, State),
+      receive_close_complete(Command, Result, NewStateWithUpdatedParameter);  
+    {pgsql, Unknown} ->
+      {stop, Unknown, {error, Unknown}, State}
+  end.
+
+%% receives the {pgsql, {ready_for_query, _}} event that is expected
+%% after processing a prepared statement. it also handles the 
+%% parameter_status event, that can be received during the execution
+%% of the prepared statement if the postgres config was reloaded before, 
+%% e.g. by executing the `select pg_reload_conf();` statement.
+receive_ready_for_query(Command, Result, State) ->
+  receive
+    %% Collect response to sync message.
+    {pgsql, {ready_for_query, _Status}} ->
+      %%io:format("execute: ~p ~p ~p~n", [Status, Command, Result]),
+      {reply, {ok, {Command, Result}}, State};
+    {pgsql, {parameter_status, {Key, Value}}} ->
+      NewStateWithUpdatedParameter = update_parameter(Key, Value, State),
+      receive_ready_for_query(Command, Result, NewStateWithUpdatedParameter);
+    {pgsql, Unknown} ->
+      {stop, Unknown, {error, Unknown}, State}
+  end.
+  
 process_execute(State, Sock) ->
     %% Either the response begins with a no_data or a row_description
     %% Needs to return {ok, Status, Result}
