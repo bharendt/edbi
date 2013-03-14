@@ -32,7 +32,7 @@ Or use it as dependency in the ``rebar.config`` of your erlang application:
 
       {deps, [
         {edbi, "0.1.2",
-          {git, "git://github.com/bharendt/edbi.git", {tag, "v0.1.2"}}}
+          {git, "git://github.com/bharendt/edbi.git", {tag, "v0.1.3"}}}
       ]}.
 
 Configuration
