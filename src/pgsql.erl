@@ -14,7 +14,7 @@
 -export([squery/2, squery/3,
 	 pquery/3, 
 	 terminate/1, 
-	 prepare/3, unprepare/2, 
+	 prepare/3, prepare/4, unprepare/2, 
 	 execute/3, execute/4, transaction/2, transaction/3]).
 
 
@@ -79,12 +79,16 @@ squery(Db, Query, Timeout) ->
 pquery(Db, Query, Params) ->
     gen_server:call(Db, {equery, {Query, Params}}).
 
-%%% prepare(Db, Name, Query) -> {ok, Status, ParamTypes, ResultTypes}
-%%% Status = idle | transaction | failed_transaction
-%%% ParamTypes = [atom()]
-%%% ResultTypes = [{ColName, ColType}]
+%% @doc prepares a statement immediately
+-spec prepare(Db::pid(), Name::atom(), Query::string()) -> {ok, Status::idle|transaction|failed_transaction, ParamTypes::list(atom()), ResultTypes::list({ColName::term(), ColType::term()})}.
 prepare(Db, Name, Query) when is_atom(Name) ->
-    gen_server:call(Db, {prepare, {atom_to_list(Name), Query}}).
+    prepare(Db, Name, Query, _Lazy = false).
+
+%% @doc prepares a statement immediately or lazily
+-spec prepare(Db::pid(), Name::atom(), Query::string(), Lazy::boolean()) -> {ok, Status::idle|transaction|failed_transaction|lazy, ParamTypes::list(atom()), ResultTypes::list({ColName::term(), ColType::term()})}.
+prepare(Db, Name, Query, Lazy) when is_atom(Name), is_boolean(Lazy) ->
+    gen_server:call(Db, {prepare, {atom_to_list(Name), Query, Lazy}}).
+
 
 %%% unprepare(Db, Name) -> ok | timeout | ...
 %%% Name = atom()

@@ -62,7 +62,14 @@
 -import(pgsql_util, [count_string/1, to_string/1]).
 -import(pgsql_util, [coldescs/2, datacoldescs/3]).
 
--record(state, {options, driver, params, socket, oidmap}).
+-record(state, {
+    options, 
+    driver, 
+    params, 
+    socket, 
+    oidmap,
+    statements_to_prepare = [] :: list({StatementName::atom(), Query::string()}) % the statements to prepare lazily
+}).
 
 start(Options) ->
     gen_server:start(?MODULE, [self(), Options], []).
@@ -251,35 +258,48 @@ handle_call({equery, {Query, Params}}, _From, State) ->
     Reply = {ok, Command, Status, NameTypes, Logs},
     {reply, Reply, State};
 
+%% Prepare a statement lazily, if it is executed with params the first time.
+handle_call({prepare, {Name, Query, _Lazy = true}}, _From, State = #state{}) ->
+    #state{statements_to_prepare = StatementsToPreparyLazily} = State,
+    StateWithStatement = case get_query_to_prepare_lazily(Name, State) of
+        false  -> State#state{statements_to_prepare = [{Name, Query} | StatementsToPreparyLazily]};
+        _Query -> State % already prepared
+    end,
+    {reply, {ok, lazy, _ParamTypes = [], _ResultNameTypes = []}, StateWithStatement};
 %% Prepare a statement, so it can be used for queries later on.
-handle_call({prepare, {Name, Query}}, _From, State) ->
-    Sock = State#state.socket,
-    send_message(Sock, parse, {Name, Query, []}),
-    send_message(Sock, describe, {prepared_statement, Name}),
-    send_message(Sock, sync, []),
-    {ok, CurState, ParamDesc, ResultDesc} = process_prepare({[], []}),
-    OidMap = State#state.oidmap,
-    ParamTypes =
-	lists:map(fun (Oid) -> dict:fetch(Oid, OidMap) end, ParamDesc),
-    ResultNameTypes = lists:map(fun ({ColName, _Format, _ColNo, Oid, _, _, _}) ->
-					{ColName, dict:fetch(Oid, OidMap)}
-				end,
-				ResultDesc),
-    Reply = {ok, CurState, ParamTypes, ResultNameTypes},
-    {reply, Reply, State};
+handle_call({prepare, {Name, Query, _Lazy = false}}, _From, State) ->
+    {reply, prepare_statement(Name, Query, State), State};
+
 
 %% Close a prepared statement.
 handle_call({unprepare, Name}, _From, State) ->
-    Sock = State#state.socket,
-    send_message(Sock, close, {prepared_statement, Name}),
-    send_message(Sock, sync, []),
-    {ok, _Status} = process_unprepare(),
-    Reply = ok,
-    {reply, Reply, State};
+    case get_and_remove_query_to_prepare_lazily(Name, State) of
+        {_Query, StateWithoutStatement} -> % lazily prepared statement was not prepared yet
+            {reply, ok, StateWithoutStatement};
+        false ->
+            Sock = State#state.socket,
+            send_message(Sock, close, {prepared_statement, Name}),
+            send_message(Sock, sync, []),
+            {ok, _Status} = process_unprepare(),
+            Reply = ok,
+            {reply, Reply, State}
+    end;
+    
+    
 
 %% Execute a prepared statement
 handle_call({execute, {Name, Params}}, _From, State) ->
   Socket = State#state.socket,
+  case get_and_remove_query_to_prepare_lazily(Name, State) of
+      {Query, StateWithoutStatement} -> % lazily prepared statement was not prepared yet
+        case prepare_statement(Name, Query, State) of
+            {ok, idle, _ParamTypes, _ResultTypes} -> ok;
+            {ok, transaction, _ParamTypes, _ResultTypes} -> ok;
+            {ok, ErrorState, _ParamTypes, _ResultTypes} -> throw({lazy_prepare, ErrorState, Query})
+        end;
+      false -> % already prepared
+          StateWithoutStatement = State
+  end,  
   %%io:format("execute: ~p ~p ~n", [Name, Params]),
   begin % Issue first requests for the prepared statement.
     BindP     = encode_message(bind, {"", Name, Params, [binary]}),
@@ -288,7 +308,7 @@ handle_call({execute, {Name, Params}}, _From, State) ->
     FlushP    = encode_message(flush, []),
     ok = send(Socket, [BindP, DescribeP, ExecuteP, FlushP])
   end,
-  receive_bind_complete(Socket, State);
+  receive_bind_complete(Socket, StateWithoutStatement);
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -681,3 +701,39 @@ encode_message(execute, {Portal, Limit}) ->
     encode($E, <<String/binary, Limit:32/integer>>);
 encode_message(sync, _) ->
     encode($S, <<>>).
+    
+    
+%% @doc gets the query that should be prepared lazily
+-spec get_query_to_prepare_lazily(StatementName::string(), State::#state{}) -> string() | false.
+get_query_to_prepare_lazily(StatementName, State = #state{}) ->
+    #state{statements_to_prepare = StatementsToPreparyLazily} = State,
+    case lists:keysearch(StatementName, 1, StatementsToPreparyLazily) of
+        false -> false;
+        {value, {StatementName, Query}} -> Query
+    end.
+
+%% @doc gets the query that should be prepared lazily and removes it from the state
+-spec get_and_remove_query_to_prepare_lazily(StatementName::string(), State::#state{}) -> {string(), StateWithoutStatement::#state{}} | false.
+get_and_remove_query_to_prepare_lazily(StatementName, State = #state{}) ->
+    #state{statements_to_prepare = StatementsToPreparyLazily} = State,
+    case lists:keytake(StatementName, 1, StatementsToPreparyLazily) of
+        {value, {StatementName, Query}, StatementsToPreparyLazilyWithoutStatement} -> {Query, State#state{statements_to_prepare = StatementsToPreparyLazilyWithoutStatement}};
+        false -> false
+    end.
+
+%% @doc prepares a statement on the database
+-spec prepare_statement(StatementName::string(), Query::string(), State::#state{}) -> {ok, Status::idle|transaction|failed_transaction, ParamTypes::list(atom()), ResultTypes::list({ColName::term(), ColType::term()})}.
+prepare_statement(StatementName, Query, State = #state{}) ->
+    #state{socket = Socket} = State,
+    send_message(Socket, parse, {StatementName, Query, []}),
+    send_message(Socket, describe, {prepared_statement, StatementName}),
+    send_message(Socket, sync, []),
+    {ok, CurState, ParamDesc, ResultDesc} = process_prepare({[], []}),
+    OidMap = State#state.oidmap,
+    ParamTypes = lists:map(fun (Oid) -> dict:fetch(Oid, OidMap) end, ParamDesc),
+    ResultNameTypes = lists:map(fun ({ColName, _Format, _ColNo, Oid, _, _, _}) ->
+                    {ColName, dict:fetch(Oid, OidMap)}
+                end,
+                ResultDesc),
+    {ok, CurState, ParamTypes, ResultNameTypes}.
+    
