@@ -248,15 +248,18 @@ handle_call({equery, {Query, Params}}, _From, State) ->
     SyncP =     encode_message(sync, []),
     ok = send(Sock, [ParseP, BindP, DescribeP, ExecuteP, SyncP]),
 
-    {ok, Command, Desc, Status, Logs} = process_equery(State, []),
-
-    OidMap = State#state.oidmap,
-    NameTypes = lists:map(fun({Name, _Format, _ColNo, Oid, _, _, _}) ->
-				  {Name, dict:fetch(Oid, OidMap)}
-			  end,
-			  Desc),
-    Reply = {ok, Command, Status, NameTypes, Logs},
-    {reply, Reply, State};
+    case process_equery(State, []) of
+        {ok, Command, Desc, Status, Logs} ->
+            OidMap = State#state.oidmap,
+            NameTypes = lists:map(fun({Name, _Format, _ColNo, Oid, _, _, _}) ->
+        				  {Name, dict:fetch(Oid, OidMap)}
+        			  end,
+        			  Desc),
+            Reply = {ok, Command, Status, NameTypes, Logs},
+            {reply, Reply, State};
+        {ok, Command, Result, NewState} -> % received for insert and update queries
+            receive_ready_for_query(Command, Result, NewState)
+    end;
 
 %% Prepare a statement lazily, if it is executed with params the first time.
 handle_call({prepare, {Name, Query, _Lazy = true}}, _From, State = #state{}) ->
@@ -375,6 +378,8 @@ process_equery(State, Log) ->
 	    OidMap = State#state.oidmap,
 	    {ok, Descs1} = pgsql_util:decode_descs(OidMap, Descs),
 	    process_equery_datarow(Descs1, Log, {undefined, Descs, undefined});
+    {pgsql, {no_data, _}} ->
+        process_execute_nodata(State);
 	{pgsql, Any} ->
 	    process_equery(State, [Any|Log])
     end.
