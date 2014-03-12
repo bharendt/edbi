@@ -12,7 +12,7 @@
          connect_link/1]).
 
 -export([squery/2, squery/3,
-	 pquery/3, 
+	 equery/3, equery/4, 
 	 terminate/1, 
 	 prepare/3, prepare/4, unprepare/2, 
 	 execute/3, execute/4, transaction/2, transaction/3]).
@@ -63,21 +63,28 @@ squery(Db, Query) ->
 squery(Db, Query, Timeout) ->
     gen_server:call(Db, {squery, Query}, Timeout).
 
-
-%%% In the "extended query" protocol, processing of queries is 
-%%% separated into multiple steps: parsing, binding of parameter
-%%% values, and execution. This offers flexibility and performance
-%%% benefits, at the cost of extra complexity.
-
-%%% pquery(Db, Query, Params) -> {ok, Command, Status, NameTypes, Rows} | timeout | ...
-%%% Query = string()
-%%% Params = [term()]
-%%% Command = string()
-%%% Status = idle | transaction | failed_transaction
-%%% NameTypes = [{ColName, ColType}]
-%%% Rows = [list()]
-pquery(Db, Query, Params) ->
-    gen_server:call(Db, {equery, {Query, Params}}).
+%% @doc Executes an extended query with infinite timeout.
+%% In the "extended query" protocol, processing of queries is 
+%% separated into multiple steps: parsing, binding of parameter
+%% values, and execution. This offers flexibility and performance
+%% benefits, at the cost of extra complexity.
+-spec equery(Db::pid(), Query::string(), Params::list(term())) -> 
+          {ok, Command::string(), Status::idle|transaction|failed_transaction, NameTypes::{ColName::string(), ColType::atom()}, Rows::list(list())} | 
+          {ok, {Command::'INSERT'|'UPDATE', RowsCount::pos_integer()}} | {error, term()}.
+equery(Db, Query, Params) ->
+    equery(Db, Query, Params, infinity).
+    
+%% @doc Executes an extended query.
+%% In the "extended query" protocol, processing of queries is 
+%% separated into multiple steps: parsing, binding of parameter
+%% values, and execution. This offers flexibility and performance
+%% benefits, at the cost of extra complexity.
+-spec equery(Db::pid(), Query::string(), Params::list(term()), Timeout::timeout()) -> 
+          {ok, Command::string(), Status::idle|transaction|failed_transaction, NameTypes::{ColName::string(), ColType::atom()}, Rows::list(list())} | 
+          {ok, {Command::'INSERT'|'UPDATE', RowsCount::pos_integer()}} | {error, term()}.
+equery(Db, Query, Params, Timeout) ->
+    gen_server:call(Db, {equery, {Query, Params}}, Timeout).
+    
 
 %% @doc prepares a statement immediately
 -spec prepare(Db::pid(), Name::atom(), Query::string()) -> {ok, Status::idle|transaction|failed_transaction, ParamTypes::list(atom()), ResultTypes::list({ColName::term(), ColType::term()})}.
