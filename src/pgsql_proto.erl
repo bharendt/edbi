@@ -189,20 +189,27 @@ connected(StateData, Sock) ->
     {ok, Unwrapper} = pgsql_tcp:start_link(Sock, self()),
     ok = gen_tcp:controlling_process(Sock, Unwrapper),
 
+    {ok, get_oid_map(StateData, Sock)}.
+    
+
+%% @doc gets the oid map for types. this may be updated when preparing new statements
+%%      or executing equeries when new types were added (e.g. ENUMS) since start of
+%%      this connection
+-spec get_oid_map(StateData::#state{}, Sock::term()) -> StateDataWithOidMap::#state{}.
+get_oid_map(StateData, Sock) ->
     %% Lookup oid to type names and store them in a dictionary under
     %% 'oidmap' in the process dictionary.
     Packet = encode_message(squery, "SELECT oid, typname FROM pg_type"),
     ok = send(Sock, Packet),
     {ok, [{"SELECT"++_Rest, _ColDesc, Rows}]} = process_squery([]),
     Rows1 = lists:map(fun ([CodeS, NameS]) ->
-			      Code = list_to_integer(CodeS),
-			      Name = list_to_atom(NameS),
-			      {Code, Name}
-		      end,
-		      Rows),
+                  Code = list_to_integer(CodeS),
+                  Name = list_to_atom(NameS),
+                  {Code, Name}
+              end,
+              Rows),
     OidMap = dict:from_list(Rows1),
-
-    {ok, StateData#state{oidmap = OidMap}}.
+    StateData#state{oidmap = OidMap}.
 
 
 handle_call(terminate, _From, State) ->
@@ -243,13 +250,23 @@ handle_call({equery, {Query, Params}}, _From, State) ->
 
     {ok, Command, Desc, Status, Logs} = process_equery(State, []),
 
-    OidMap = State#state.oidmap,
-    NameTypes = lists:map(fun({Name, _Format, _ColNo, Oid, _, _, _}) ->
-				  {Name, dict:fetch(Oid, OidMap)}
-			  end,
-			  Desc),
+    {NameTypes, MaybeUpdatedOidMapForResultTypes, _} = lists:foldr(fun({Name, _Format, _ColNo, Oid, _, _, _}, {ResultNameTypesAcc, OidMapAcc, OidMapUpdated}) -> 
+        {TypeName, UpdatedOidMapAcc, DidUpdateOidMap} = case dict:find(Oid, OidMapAcc) of
+            {ok, Value} -> 
+                {Value, OidMapAcc, OidMapUpdated};
+            error when not OidMapUpdated -> 
+                error_logger:info_report([{module, ?MODULE}, {line, ?LINE}, {message, "Updated oid map because type for statement to prepare was not found."}, 
+                                          {statement, Name}, {oid_of_type, Oid}]),
+                #state{oidmap = UpdatedOidMap} = get_oid_map(State, Sock),
+                {dict:fetch(Oid, UpdatedOidMap), UpdatedOidMap, true};
+            _ -> 
+                {dict:fetch(Oid, OidMapAcc), OidMapAcc, OidMapUpdated}
+        end,
+        {[{Name, TypeName} | ResultNameTypesAcc], UpdatedOidMapAcc, DidUpdateOidMap} 
+    end,{[], State#state.oidmap, false}, Desc),
+
     Reply = {ok, Command, Status, NameTypes, Logs},
-    {reply, Reply, State};
+    {reply, Reply, State#state{oidmap = MaybeUpdatedOidMapForResultTypes}};
 
 %% Prepare a statement, so it can be used for queries later on.
 handle_call({prepare, {Name, Query}}, _From, State) ->
@@ -258,15 +275,39 @@ handle_call({prepare, {Name, Query}}, _From, State) ->
     send_message(Sock, describe, {prepared_statement, Name}),
     send_message(Sock, sync, []),
     {ok, CurState, ParamDesc, ResultDesc} = process_prepare({[], []}),
-    OidMap = State#state.oidmap,
-    ParamTypes =
-	lists:map(fun (Oid) -> dict:fetch(Oid, OidMap) end, ParamDesc),
-    ResultNameTypes = lists:map(fun ({ColName, _Format, _ColNo, Oid, _, _, _}) ->
-					{ColName, dict:fetch(Oid, OidMap)}
-				end,
-				ResultDesc),
+    % get type names for param type oids
+    {ParamTypes, MaybeUpdatedOidMapForParamTypes, OidMapUpdatedForParamTypes} = lists:foldr(fun(Oid, {ParamTypesAcc, OidMapAcc, OidMapUpdated}) -> 
+        {TypeName, UpdatedOidMapAcc, DidUpdateOidMap} = case dict:find(Oid, OidMapAcc) of
+            {ok, Value} -> 
+                {Value, OidMapAcc, OidMapUpdated};
+            error when not OidMapUpdated -> 
+                error_logger:info_report([{module, ?MODULE}, {line, ?LINE}, {message, "Updated oid map because type for statement to prepare was not found."}, 
+                                          {statement, Name}, {oid_of_type, Oid}]),
+                #state{oidmap = UpdatedOidMap} = get_oid_map(State, Sock),
+                {dict:fetch(Oid, UpdatedOidMap), UpdatedOidMap, true};
+            _ -> 
+                {dict:fetch(Oid, OidMapAcc), OidMapAcc, OidMapUpdated}
+        end,
+        {[TypeName | ParamTypesAcc], UpdatedOidMapAcc, DidUpdateOidMap} 
+    end,{[], State#state.oidmap, false}, ParamDesc),
+    % get type names for result type oids
+    {ResultNameTypes, MaybeUpdatedOidMapForResultTypes, _} = lists:foldr(fun({ColName, _Format, _ColNo, Oid, _, _, _}, {ResultNameTypesAcc, OidMapAcc, OidMapUpdated}) -> 
+        {TypeName, UpdatedOidMapAcc, DidUpdateOidMap} = case dict:find(Oid, OidMapAcc) of
+            {ok, Value} -> 
+                {Value, OidMapAcc, OidMapUpdated};
+            error when not OidMapUpdated -> 
+                error_logger:info_report([{module, ?MODULE}, {line, ?LINE}, {message, "Updated oid map because type for statement to prepare was not found."}, 
+                                          {statement, Name}, {oid_of_type, Oid}]),
+                #state{oidmap = UpdatedOidMap} = get_oid_map(State, Sock),
+                {dict:fetch(Oid, UpdatedOidMap), UpdatedOidMap, true};
+            _ -> 
+                {dict:fetch(Oid, OidMapAcc), OidMapAcc, OidMapUpdated}
+        end,
+        {[{ColName, TypeName} | ResultNameTypesAcc], UpdatedOidMapAcc, DidUpdateOidMap} 
+    end,{[], MaybeUpdatedOidMapForParamTypes, OidMapUpdatedForParamTypes}, ResultDesc),
+
     Reply = {ok, CurState, ParamTypes, ResultNameTypes},
-    {reply, Reply, State};
+    {reply, Reply, State#state{oidmap = MaybeUpdatedOidMapForResultTypes}};
 
 %% Close a prepared statement.
 handle_call({unprepare, Name}, _From, State) ->
