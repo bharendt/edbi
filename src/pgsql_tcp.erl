@@ -26,7 +26,7 @@ start_link(Sock, ProtoPid) ->
     gen_server:start_link(?MODULE, [Sock, ProtoPid], []).
 
 init([Sock, ProtoPid]) ->
-    inet:setopts(Sock, [{active, once}]),
+    inet:setopts(Sock, [{active, once}, {keepalive, true}]),
     {ok, #state{socket = Sock, protopid = ProtoPid, buffer = <<>>}}.
 
 handle_call(_Request, _From, State) ->
