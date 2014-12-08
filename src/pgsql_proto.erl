@@ -330,6 +330,9 @@ handle_call({execute, {Name, Params}}, _From, State) ->
     ok = send(Socket, [BindP, DescribeP, ExecuteP, FlushP])
   end,
   receive_bind_complete(Socket, State);
+  
+handle_call(get_socket, _From, State = #state{socket = Socket}) ->
+  {reply, Socket, State};  
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
